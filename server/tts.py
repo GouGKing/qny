@@ -3,13 +3,14 @@ import sys
 import os
 import wave
 import re
+import math
 from piper import PiperVoice
 
 # 检测文本中是否包含中文字符
 def contains_chinese(text):
     return bool(re.search(r'[\u4e00-\u9fa5]', text))
 
-# 生成中文提示音（替代中文发音）
+# 生成中文提示音（替代中文发音） - 备用方案
 def generate_chinese_prompt_sound(output_path):
     sample_rate = 22050
     duration = 1.5  # 1.5秒
@@ -38,17 +39,17 @@ def generate_chinese_prompt_sound(output_path):
         wf.setframerate(sample_rate)
         wf.writeframes(audio_data)
 
-import math
-
 def main():
     print("[TTS] 启动TTS服务")
     if len(sys.argv) < 3:
-        print("Usage: python tts.py <text_or_textfile> <output_path>")
+        print("Usage: python tts.py <text_or_textfile> <output_path> [voice_model]")
         sys.exit(1)
 
     input_arg = sys.argv[1]
     output_path = sys.argv[2]
-    print(f"[TTS] 输入参数: {input_arg}, 输出文件: {output_path}")
+    # 获取可选的语音模型参数，如果没有提供则默认为None
+    voice_model = sys.argv[3] if len(sys.argv) >= 4 else None
+    print(f"[TTS] 输入参数: {input_arg}, 输出文件: {output_path}, 语音模型: {voice_model}")
 
     # 读取文本
     if os.path.exists(input_arg) and input_arg.lower().endswith(".txt"):
@@ -60,27 +61,44 @@ def main():
         print(f"[TTS] 直接使用输入文本")
     
     # 检查是否包含中文字符
-    if contains_chinese(text):
-        print("[Warning] 检测到中文字符，但当前使用的是英文语音模型")
-        print("[Warning] 英文模型无法正确发音中文内容，建议安装中文TTS模型")
+    has_chinese = contains_chinese(text)
+    print(f"[TTS] 检测到中文字符: {has_chinese}")
 
     print(f"[TTS] 生成语音文本长度: {len(text)} 字符")
     # 显示文本前30个字符用于调试
     print(f"[TTS] 文本预览: {text[:30]}{'...' if len(text) > 30 else ''}")
-    
-    # 如果文本包含中文但我们没有中文模型，我们可以提供一个友好的提示
-    if contains_chinese(text):
-        # 生成一个提示音替代中文发音
-        print("[TTS] 正在为中文文本生成提示音")
-        generate_chinese_prompt_sound(output_path)
-        print(f"[Success] 已生成中文提示音: {output_path}")
-        sys.exit(0)
 
-    # 获取模型绝对路径
-    MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices", "en_US-libritts-high.onnx")
-    if not os.path.exists(MODEL_PATH):
-        print(f"[Error] 模型不存在: {MODEL_PATH}")
-        sys.exit(1)
+    # 确定使用的语音模型
+    voices_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices")
+    
+    # 如果指定了语音模型，使用指定的模型
+    if voice_model:
+        MODEL_PATH = os.path.join(voices_dir, voice_model)
+        # 验证模型是否存在
+        if not os.path.exists(MODEL_PATH):
+            print(f"[Error] 指定的模型不存在: {MODEL_PATH}")
+            sys.exit(1)
+    else:
+        # 否则根据文本是否包含中文选择默认模型
+        if has_chinese:
+            # 优先使用中文女中音模型（替代之前的小孩声音模型）
+            MODEL_PATH = os.path.join(voices_dir, "zh_CN-huayan-medium.onnx")
+            if not os.path.exists(MODEL_PATH):
+                print(f"[Warning] 中文女中音模型不存在，回退到基础中文模型")
+                MODEL_PATH = os.path.join(voices_dir, "zh_CN-huayan-x_low.onnx")
+                if not os.path.exists(MODEL_PATH):
+                    print(f"[Warning] 中文模型不存在，回退到英文模型")
+                    MODEL_PATH = os.path.join(voices_dir, "en_US-libritts-high.onnx")
+        else:
+            # 英文文本使用英文模型
+            MODEL_PATH = os.path.join(voices_dir, "en_US-libritts-high.onnx")
+        
+        # 验证最终选择的模型是否存在
+        if not os.path.exists(MODEL_PATH):
+            print(f"[Error] 模型不存在: {MODEL_PATH}")
+            sys.exit(1)
+    
+    print(f"[TTS] 选择的语音模型: {os.path.basename(MODEL_PATH)}")
 
     print("[Loading] 正在加载 Piper 模型...")
     try:

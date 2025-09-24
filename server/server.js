@@ -16,14 +16,22 @@ const upload = multer({ dest: "uploads/" });
 const __dirname = path.resolve();
 
 // ====== call Ollama (local) ======
-async function chatWithOllama(systemPrompt, userInput) {
+async function chatWithOllama(systemPrompt, userInput, isEnglishVoice = false) {
+  // 如果使用英文语音包，在系统提示中添加英文回复要求
+  let finalSystemPrompt = systemPrompt;
+  if (isEnglishVoice) {
+    // 使用更强烈的指令，确保回复为英文
+    finalSystemPrompt = `${systemPrompt}\n\n重要要求：请一定用英语回答，不要使用任何中文。所有回复内容必须是英文。`;
+    console.log("[语言控制] 使用英文语音包，强制要求英文回复");
+  }
+  
   const resp = await fetch("http://localhost:11434/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "mistral",
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: finalSystemPrompt },
         { role: "user", content: userInput }
       ]
     }),
@@ -72,13 +80,20 @@ function transcribeAudio(filePath) {
 }
 
 // ====== Piper TTS (call python tts.py) ======
-function synthesizeSpeech(text, outputPath) {
+function synthesizeSpeech(text, outputPath, voiceModel = null) {
   return new Promise((resolve, reject) => {
     // To avoid very long argv issues, write text to temp file and pass file path
     const tmpIn = path.join(__dirname, "tmp_tts_input.txt");
     fs.writeFileSync(tmpIn, text, "utf-8");
 
-    const py = spawn("python", ["tts.py", tmpIn, outputPath]);
+    // 构建命令参数，根据是否提供voiceModel决定是否添加第四个参数
+    const args = ["tts.py", tmpIn, outputPath];
+    if (voiceModel) {
+      args.push(voiceModel);
+      console.log(`[TTS] 使用语音模型: ${voiceModel}`);
+    }
+
+    const py = spawn("python", args);
 
     py.stdout.on("data", (data) => console.log("Piper:", data.toString()));
     py.stderr.on("data", (data) => console.error("Piper err:", data.toString()));
@@ -109,12 +124,22 @@ app.get("/api/roles", (req, res) => {
 app.post("/api/chat", async (req, res) => {
   try {
     const { roleId, userMessage } = req.body;
+    console.log(`[API调用] 收到chat请求，角色ID: ${roleId}`);
+    
     const role = db.prepare("SELECT * FROM roles WHERE id = ?").get(roleId);
-    if (!role) return res.status(400).json({ error: "role not found" });
-
-    const reply = await chatWithOllama(role.system_prompt, userMessage);
+    if (!role) {
+      console.log(`[API调用] 未找到角色ID: ${roleId}`);
+      return res.status(400).json({ error: "role not found" });
+    }
+    
+    console.log(`[API调用] 使用角色: ${role.name} (ID: ${roleId})，语音模型: ${role.voice_model}`);
+    
+    // 判断是否使用英文语音包 (en_US开头的模型)
+    const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
+    
+    const reply = await chatWithOllama(role.system_prompt, userMessage, isEnglishVoice);
     const audioFile = path.join(__dirname, "reply.wav");
-    await synthesizeSpeech(reply, audioFile);
+    await synthesizeSpeech(reply, audioFile, role.voice_model);
     return res.json({ replyText: reply, audioUrl: "http://localhost:3000/reply.wav" });
   } catch (err) {
     console.error(err);
@@ -126,8 +151,15 @@ app.post("/api/chat", async (req, res) => {
 app.post("/api/voice-chat", upload.single("audio"), async (req, res) => {
   try {
     const { roleId } = req.body;
+    console.log(`[API调用] 收到voice-chat请求，角色ID: ${roleId}`);
+    
     const role = db.prepare("SELECT * FROM roles WHERE id = ?").get(roleId);
-    if (!role) return res.status(400).json({ error: "role not found" });
+    if (!role) {
+      console.log(`[API调用] 未找到角色ID: ${roleId}`);
+      return res.status(400).json({ error: "role not found" });
+    }
+    
+    console.log(`[API调用] 使用角色: ${role.name} (ID: ${roleId})，语音模型: ${role.voice_model}`);
 
     const audioPath = req.file.path;
 
@@ -136,10 +168,13 @@ app.post("/api/voice-chat", upload.single("audio"), async (req, res) => {
     // spawn('ffmpeg', ['-i', req.file.path, '-ar', '16000', '-ac', '1', convertedPath'])
 
     const text = await transcribeAudio(audioPath);
-    const reply = await chatWithOllama(role.system_prompt, text);
+    // 判断是否使用英文语音包 (en_US开头的模型)
+    const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
+    
+    const reply = await chatWithOllama(role.system_prompt, text, isEnglishVoice);
 
     const audioFile = path.join(__dirname, "reply.wav");
-    await synthesizeSpeech(reply, audioFile);
+    await synthesizeSpeech(reply, audioFile, role.voice_model);
 
     return res.json({ userText: text, replyText: reply, audioUrl: "http://localhost:3000/reply.wav" });
   } catch (err) {
