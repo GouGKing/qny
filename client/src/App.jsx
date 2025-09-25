@@ -8,6 +8,7 @@ export default function App() {
   const [roleId, setRoleId] = useState(null);
   const [recording, setRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false); // 新增：跟踪是否已暂停播放
+  const [isAgentMode, setIsAgentMode] = useState(false); // 新增：跟踪是否处于智能体对话模式
   const mediaRecorderRef = useRef(null);
   const audioRef = useRef(null); // 新增：音频对象引用，用于控制播放
 
@@ -35,9 +36,10 @@ export default function App() {
           // 显示错误消息给用户
           alert(`错误: ${data.msg}`);
         } 
+        // 不再为user-text类型消息添加新的聊天记录，避免重复显示
         else if (data.type === "user-text") {
-          console.log('用户文本消息:', data.text);
-          setChat(prev => [...prev, { user: data.text, role: "" }]);
+          console.log('收到用户文本消息确认:', data.text);
+          // 用户消息已经在sendTextMessage函数中添加，这里不再重复添加
         } 
         else if (data.type === "reply-text") {
           console.log('AI回复文本:', data.text);
@@ -161,6 +163,9 @@ export default function App() {
     const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
     mediaRecorderRef.current = mr;
 
+    // 在开始录音时，先更新UI显示'用户正在说话'
+    setChat(prev => [...prev, { user: "用户正在说话", role: "AI正在思考..." }]);
+
     mr.ondataavailable = async (e) => {
       if (e.data.size > 0 && socket && socket.readyState === WebSocket.OPEN) {
         const ab = await e.data.arrayBuffer();
@@ -185,8 +190,40 @@ export default function App() {
       console.log('发送文本消息:', text);
       // 先更新UI显示用户输入
       setChat(prev => [...prev, { user: text, role: "AI正在思考..." }]);
-      // 再发送给服务器
-      socket.send(JSON.stringify({ type: "text", text }));
+      // 再发送给服务器，包含智能体模式标识
+      socket.send(JSON.stringify({ 
+        type: "text", 
+        text, 
+        isAgentMode 
+      }));
+      // 重置暂停状态
+      setIsPaused(false);
+    }
+  };
+
+  // 新增：重新生成AI回复
+  const regenerateReply = (index) => {
+    if (socket && socket.readyState === WebSocket.OPEN && chat[index]) {
+      console.log('重新生成AI回复，消息索引:', index);
+      
+      // 重点修复：完全停止并清理当前正在播放或加载的音频
+      if (audioRef.current) {
+        console.log('重新生成时停止当前音频播放');
+        audioRef.current.pause();
+        audioRef.current = null; // 清空引用以避免旧音频后续加载完成后播放
+      }
+      
+      // 更新UI显示"AI正在思考..."
+      setChat(prev => {
+        const newChat = [...prev];
+        newChat[index].role = "AI正在思考...";
+        return newChat;
+      });
+      
+      // 发送重新生成请求到服务器
+      const userMessage = chat[index].user;
+      socket.send(JSON.stringify({ type: "regenerate", text: userMessage }));
+      
       // 重置暂停状态
       setIsPaused(false);
     }
@@ -258,26 +295,59 @@ export default function App() {
         // 对话界面
         <div className="chat-page">
           <div className="chat-header">
-            <button className="back-button" onClick={goBackToHome}>← 返回主页</button>
+            <button className="back-button" onClick={goBackToHome}>
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M18.5 30.5L8.5 20L18.5 9.5" stroke="#2F88FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M26.5 30.5L16.5 20L26.5 9.5" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
             <h2>{selectedRole?.name}</h2>
+            <button className="robot-button" onClick={() => setIsAgentMode(!isAgentMode)}>
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M28.5 16C28.5 13.7909 26.7091 12 24.5 12H15.5C13.2909 12 11.5 13.7909 11.5 16V22.5C11.5 24.7091 13.2909 26.5 15.5 26.5H24.5C26.7091 26.5 28.5 24.7091 28.5 22.5V16Z" stroke="#2F88FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M16.5 26.5V31.5" stroke="#2F88FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M23.5 26.5V31.5" stroke="#2F88FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M19 16C19 16 19.5 14.5 20 14.5C20.5 14.5 21 16 21 16" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M15 18.5H17" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M23 18.5H25" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
           </div>
           
           <div className="chat-container">
             {chat.map((c, i) => (
               <div key={i} className="chat-message">
-                <div className="user-message"><strong>你:</strong> {c.user}</div>
+                <div className="user-message"><strong></strong> {c.user}</div>
                 <div className="ai-message"><strong>AI:</strong> {c.role}</div>
+                {/* 在AI回复下方添加重新生成按钮 */}
+                {/* 只有最后一个AI回复才显示重新生成按钮 */}
+                {i === chat.length - 1 && (
+                  <button 
+                    className="regenerate-button" 
+                    onClick={() => regenerateReply(i)}
+                    disabled={c.role === "AI正在思考..."}
+                  >
+                    🔄 重新生成
+                  </button>
+                )}
               </div>
             ))}
           </div>
 
           <div className="input-container">
-            <input 
-              type="text" 
-              placeholder="输入文字消息..." 
+            <textarea 
+              placeholder="输入文字消息... (Enter发送，Shift+Enter换行)" 
               className="text-input"
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
+              rows="3"
+              onKeyDown={(e) => {
+                // Shift+Enter插入换行符
+                if (e.key === 'Enter' && e.shiftKey) {
+                  // 不需要阻止默认行为，因为textarea默认支持Enter换行
+                  // 这里可以添加其他处理逻辑(如果需要)
+                }
+                // 单独按Enter发送消息
+                else if (e.key === 'Enter') {
+                  e.preventDefault();
                   sendTextMessage(e.target.value);
                   e.target.value = '';
                 }
@@ -290,7 +360,7 @@ export default function App() {
             }}>发送</button>
           </div>
 
-          <div className="control-buttons">
+          <div className="combined-buttons">
             {/* 暂停/恢复按钮 */}
             {!isPaused ? (
               <button className="control-button" onClick={pausePlayback} disabled={recording}>
@@ -304,9 +374,8 @@ export default function App() {
             <span className="status-text">
               {isPaused ? '已暂停' : ''}
             </span>
-          </div>
-
-          <div className="record-buttons">
+            
+            {/* 开始说话/停止按钮 */}
             {!recording ? (
               <button className="record-button" onClick={startRecording}>🎤 开始说话</button>
             ) : (
