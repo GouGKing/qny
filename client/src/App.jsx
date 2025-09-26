@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import RealtimeChat from "./components/RealtimeChat";
 import './App.css';
+
+// 定义角色头像映射
+const roleAvatars = {
+  "Socrates": "👴", // 学者老人
+  "Young Wizard": "🧙‍♂️", // 巫师
+  "英语听力播报": "🎙️", // 麦克风
+  "厨艺专家": "👩‍🍳", // 厨师
+  "孔子": "🎓", // 毕业帽/学者
+  "面试官": "💼" // 公文包
+};
 
 export default function App() {
   const [socket, setSocket] = useState(null);
@@ -11,12 +22,17 @@ export default function App() {
   const [isAgentMode, setIsAgentMode] = useState(false); // 新增：跟踪是否处于智能体对话模式
   const mediaRecorderRef = useRef(null);
   const audioRef = useRef(null); // 新增：音频对象引用，用于控制播放
+  const [showRealtime, setShowRealtime] = useState(false); // 新增：是否显示实时聊天窗口
+  // 新增：搜索相关状态
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filteredRoles, setFilteredRoles] = useState([]);
 
   useEffect(() => {
     fetch("http://localhost:3000/api/roles")
       .then(r => r.json())
       .then(data => {
         setRoles(data);
+        setFilteredRoles(data); // 初始时显示所有角色
         // 不要覆盖已经设置的默认角色ID
         console.log('已加载角色列表，当前选择角色ID:', roleId);
       });
@@ -39,7 +55,16 @@ export default function App() {
         // 不再为user-text类型消息添加新的聊天记录，避免重复显示
         else if (data.type === "user-text") {
           console.log('收到用户文本消息确认:', data.text);
-          // 用户消息已经在sendTextMessage函数中添加，这里不再重复添加
+          // 更新聊天记录中最后一条消息的用户文本
+          setChat(prev => {
+            if (prev.length === 0) {
+              // 如果聊天记录为空，创建新的对话条目
+              return [{ user: data.text, role: "AI正在思考..." }];
+            }
+            const arr = [...prev];
+            arr[arr.length - 1].user = data.text;
+            return arr;
+          });
         } 
         else if (data.type === "reply-text") {
           console.log('AI回复文本:', data.text);
@@ -157,6 +182,25 @@ export default function App() {
 
   // 移除了第二个useEffect钩子，只在selectRole函数中处理角色配置
   // 这样可以避免由于状态变化和副作用导致的复杂问题
+  
+  // 新增：处理搜索输入
+  const handleSearchChange = (e) => {
+    const term = e.target.value.toLowerCase();
+    setSearchTerm(term);
+    
+    // 根据搜索词过滤角色
+    if (term.trim() === '') {
+      setFilteredRoles(roles);
+    } else {
+      const filtered = roles.filter(role => 
+        role.name.toLowerCase().includes(term) ||
+        role.feature1.toLowerCase().includes(term) ||
+        role.feature2.toLowerCase().includes(term) ||
+        role.feature3.toLowerCase().includes(term)
+      );
+      setFilteredRoles(filtered);
+    }
+  };
 
   async function startRecording() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -273,22 +317,72 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {showHome ? (
+      {showRealtime ? (
+        // 实时聊天窗口
+        <RealtimeChat 
+          onExit={() => setShowRealtime(false)} 
+          roleAvatars={roleAvatars} 
+          selectedRole={selectedRole}
+        /> 
+      ) : showHome ? (
         // 主页界面
         <div className="home-page">
           <h1 className="main-title">AI 对话角色选择</h1>
+          
+          {/* 新增：搜索框 */}
+          <div className="search-container">
+            <input
+              type="text"
+              className="search-input"
+              placeholder="搜索角色..."
+              value={searchTerm}
+              onChange={handleSearchChange}
+            />
+            {searchTerm && (
+              <button
+                className="clear-search-button"
+                onClick={() => {
+                  setSearchTerm('');
+                  setFilteredRoles(roles);
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+          
+          {/* 显示搜索结果数量 */}
+          {searchTerm && (
+            <div className="search-results-info">
+              找到 {filteredRoles.length} 个角色
+            </div>
+          )}
+          
           <div className="roles-grid">
-            {roles.map(role => (
+            {filteredRoles.map(role => (
               <div 
                 key={role.id} 
                 className="role-card" 
                 onClick={() => selectRole(role)}
               >
-                <div className="role-image">👤</div>
-                <h3 className="role-name">{role.name}</h3>
-                <p className="role-description">{role.description || '与这个AI角色进行对话'}</p>
+                <div className="role-header">
+                    <div className="role-image">{roleAvatars[role.name] || "👤"}</div>
+                    <h3 className="role-name">{role.name}</h3>
+                  </div>
+                <div className="role-features">
+                  <div className="feature-item">• {role.feature1}</div>
+                <div className="feature-item">• {role.feature2}</div>
+                <div className="feature-item">• {role.feature3}</div>
               </div>
-            ))}
+            </div>
+          ))}
+          
+          {/* 搜索结果为空时显示 */}
+          {filteredRoles.length === 0 && (
+            <div className="no-results">
+              没有找到匹配的角色
+            </div>
+          )}
           </div>
         </div>
       ) : (
@@ -301,24 +395,17 @@ export default function App() {
                 <path d="M26.5 30.5L16.5 20L26.5 9.5" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </button>
-            <h2>{selectedRole?.name}</h2>
-            <button className="robot-button" onClick={() => setIsAgentMode(!isAgentMode)}>
-              <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M28.5 16C28.5 13.7909 26.7091 12 24.5 12H15.5C13.2909 12 11.5 13.7909 11.5 16V22.5C11.5 24.7091 13.2909 26.5 15.5 26.5H24.5C26.7091 26.5 28.5 24.7091 28.5 22.5V16Z" stroke="#2F88FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M16.5 26.5V31.5" stroke="#2F88FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M23.5 26.5V31.5" stroke="#2F88FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M19 16C19 16 19.5 14.5 20 14.5C20.5 14.5 21 16 21 16" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M15 18.5H17" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M23 18.5H25" stroke="#43CCF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </button>
+            <h2><span className="role-image-header">{roleAvatars[selectedRole?.name] || "👤"}</span> {selectedRole?.name}</h2>
+            <button className="robot-button" onClick={() => setShowRealtime(true)}>
+            {roleAvatars[selectedRole?.name]}通话
+           </button>
           </div>
           
           <div className="chat-container">
             {chat.map((c, i) => (
               <div key={i} className="chat-message">
-                <div className="user-message"><strong></strong> {c.user}</div>
-                <div className="ai-message"><strong>AI:</strong> {c.role}</div>
+                <div className="user-message"> {c.user}</div>
+                <div className="ai-message"><strong>{roleAvatars[selectedRole?.name] || "🤖"} :</strong> {c.role}</div>
                 {/* 在AI回复下方添加重新生成按钮 */}
                 {/* 只有最后一个AI回复才显示重新生成按钮 */}
                 {i === chat.length - 1 && (

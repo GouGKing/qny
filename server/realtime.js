@@ -4,10 +4,39 @@ import path from "path";
 import Database from "better-sqlite3";
 import { spawn } from "child_process";
 import fetch from "node-fetch";
-import { setupLogger } from './detailed-logger.js';
 
-// 设置详细日志记录器
-const logger = setupLogger();
+// 完整的日志记录器实现
+const logger = {
+  info: (...args) => console.log(`[INFO] ${args.join(' ')}`),
+  error: (...args) => console.error(`[ERROR] ${args.join(' ')}`),
+  debug: (...args) => console.log(`[DEBUG] ${args.join(' ')}
+`),
+  monitorWebSocketMessages: (ws) => {
+    // 简单的WebSocket消息监控实现
+    const originalSend = ws.send;
+    ws.send = function(message, options, callback) {
+      console.log(`[WebSocket] 发送消息: ${message.length > 100 ? message.substring(0, 100) + '...' : message}`);
+      return originalSend.call(this, message, options, callback);
+    };
+  },
+  monitorTranscribeBuffer: (transcribeFunc) => {
+    // 监控语音转文字函数的执行
+    return async (buffer) => {
+      console.log(`[Transcribe] 开始处理音频，大小: ${buffer.length} 字节`);
+      try {
+        const startTime = Date.now();
+        const result = await transcribeFunc(buffer);
+        const endTime = Date.now();
+        console.log(`[Transcribe] 转换完成，耗时: ${endTime - startTime}ms，结果长度: ${result.length} 字符`);
+        return result;
+      } catch (error) {
+        console.error(`[Transcribe] 转换失败:`, error);
+        throw error;
+      }
+    };
+  }
+};
+
 const db = new Database("roles.db");
 const __dirname = path.resolve();
 
@@ -246,20 +275,29 @@ function generateBackupBeep(filePath) {
 }
 
 wss.on("connection", (ws) => {
-  console.log("client connected");
-  let role = null; // 初始化为null，等待客户端明确选择角色
+  // 为每个连接生成唯一标识，用于调试
+  const connectionId = Math.random().toString(36).substring(2, 10);
+  console.log(`client connected [ID: ${connectionId}]`);
+  // 设置默认角色（如果存在的话），避免未选择角色导致的错误
+  let role = db.prepare("SELECT * FROM roles LIMIT 1").get();
+  if (role) {
+    console.log(`[${connectionId}] 已自动选择默认角色: ${role.name} [voice_model: ${role.voice_model}]`);
+  } else {
+    console.log(`[${connectionId}] 未找到默认角色，等待用户选择`);
+    role = null;
+  }
   let chunks = [];
   let isPlaying = false; // 新增：跟踪当前是否正在播放语音
   let pendingAudio = null; // 新增：存储暂停时的待播放音频
-  
+
   // 使用监控版本的WebSocket消息处理
   logger.monitorWebSocketMessages(ws);
-  
+
   // 新增：播放音频的函数，支持暂停/恢复
   function playAudio(audioData) {
     if (!isPlaying) {
       isPlaying = true;
-      console.log("开始播放音频");
+      console.log(`[${connectionId}] 开始播放音频`);
       ws.send(JSON.stringify({ 
         type: "reply-audio", 
         audio: audioData, 
@@ -267,29 +305,31 @@ wss.on("connection", (ws) => {
       }));
     }
   }
-  
+
   ws.on("message", async (msg) => {
-    console.log("收到客户端消息");
+    console.log(`[${connectionId}] 收到客户端消息`);
     let data;
-    
+
     try {
       data = JSON.parse(msg.toString());
-      console.log("解析消息成功", { type: data.type });
+      console.log(`[${connectionId}] 解析消息成功`, { type: data.type });
     } catch(e) {
-      console.error("解析消息失败", e);
+      console.error(`[${connectionId}] 解析消息失败`, e);
       data = null;
     }
-    
+
     if (data && data.type === "config") {
+      // 添加更详细的角色切换日志
+      console.log(`[${connectionId}] 收到角色配置请求: roleId=${data.roleId}`);
       role = db.prepare("SELECT * FROM roles WHERE id = ?").get(data.roleId);
       if (role) {
-        console.log(`角色切换为: ${role.name}`);
+        console.log(`[${connectionId}] 角色切换为: ${role.name} [voice_model: ${role.voice_model}]`);
         ws.send(JSON.stringify({ 
           type: "info", 
           msg: `角色切换：${role.name}` 
         }));
       } else {
-        console.error(`未找到ID为${data.roleId}的角色`);
+        console.error(`[${connectionId}] 未找到ID为${data.roleId}的角色`);
         ws.send(JSON.stringify({ 
           type: "error", 
           msg: "未找到该角色" 
@@ -298,13 +338,13 @@ wss.on("connection", (ws) => {
     } else if (data && data.type === "pause") {
       // 新增：处理暂停请求
       isPlaying = false;
-      console.log("暂停播放音频");
+      console.log(`[${connectionId}] 暂停播放音频`);
       ws.send(JSON.stringify({ type: "pause-ack" }));
     } else if (data && data.type === "resume") {
       // 新增：处理恢复请求
       if (pendingAudio) {
         isPlaying = true;
-        console.log("恢复播放音频");
+        console.log(`[${connectionId}] 恢复播放音频`);
         ws.send(JSON.stringify({ 
           type: "reply-audio", 
           audio: pendingAudio, 
@@ -315,119 +355,133 @@ wss.on("connection", (ws) => {
       ws.send(JSON.stringify({ type: "resume-ack" }));
     } else if (data && data.type === "text") {
       // 处理纯文本消息
-      console.log(`收到纯文本消息: ${data.text.substring(0, 30)}${data.text.length > 30 ? '...' : ''}`);
+      console.log(`[${connectionId}] 收到纯文本消息: ${data.text.substring(0, 30)}${data.text.length > 30 ? '...' : ''}`);
       const userText = data.text;
       ws.send(JSON.stringify({ 
         type: "user-text", 
         text: userText 
       }));
-      
+
       // 暂停当前播放（如果有的话）
       if (isPlaying) {
         isPlaying = false;
         pendingAudio = null;
       }
-      
+
       // 检查是否已选择角色
       if (!role) {
-        console.error("未选择角色，无法处理消息");
+        console.error(`[${connectionId}] 未选择角色，无法处理消息`);
         ws.send(JSON.stringify({ 
           type: "error", 
           msg: "请先选择一个角色" 
         }));
         return;
       }
-      
+
       // 判断是否使用英文语音包 (en_US开头的模型)
       const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
       const replyText = await chatWithOllama(role.system_prompt, userText, isEnglishVoice);
-      console.log(`AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
-      
+      console.log(`[${connectionId}] AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
+
       ws.send(JSON.stringify({ 
         type: "reply-text", 
         text: replyText 
       }));
-      
+
       // 传递当前角色的语音模型
       const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
       playAudio(audioBuf.toString("base64"));
     } else if (data && data.type === "audio-chunk") {
+      // 新增：检查用户是否已选择角色，如果未选择，则提醒用户
+      if (!role) {
+        console.warn(`[${connectionId}] 警告：未选择角色就开始发送音频数据`);
+      }
       chunks.push(Buffer.from(data.chunk, "base64"));
     } else if (data && data.type === "stop") {
       const full = Buffer.concat(chunks);
       chunks = [];
-      
+
       // 使用监控版本的transcribeBuffer函数
       const userText = await logger.monitorTranscribeBuffer(transcribeBuffer)(full);
-      console.log(`语音转文字结果: ${userText}`);
-      
+      console.log(`[${connectionId}] 语音转文字结果: ${userText}`);
+
       // 再次检查转文字结果，确保不包含文件路径信息
       if (userText.includes('tmp_recv') || userText.includes('path') || userText.includes('D:\\')) {
-        console.error(`⚠️ 严重警告: 语音转文字结果包含文件路径信息: "${userText}"`);
+        console.error(`[${connectionId}] ⚠️ 严重警告: 语音转文字结果包含文件路径信息: "${userText}"`);
         // 可选：发送一个安全的默认文本，而不是可能包含敏感信息的文本
         // ws.send(JSON.stringify({ type:"user-text", text:"[语音识别出现问题，请重试]" }));
       }
-      
+
       ws.send(JSON.stringify({ 
         type: "user-text", 
         text: userText 
       }));
-      
+
       // 暂停当前播放（如果有的话）
       if (isPlaying) {
         isPlaying = false;
         pendingAudio = null;
       }
-      
+
+      // 检查是否已选择角色
+      if (!role) {
+        console.error(`[${connectionId}] 未选择角色，无法处理消息。请先在界面上选择一个角色。`);
+        ws.send(JSON.stringify({ 
+          type: "error", 
+          msg: "请先选择一个角色" 
+        }));
+        return;
+      }
+
       // 判断是否使用英文语音包 (en_US开头的模型)
       const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
       const replyText = await chatWithOllama(role.system_prompt, userText, isEnglishVoice);
-      console.log(`AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
-      
+      console.log(`[${connectionId}] AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
+
       ws.send(JSON.stringify({ 
         type: "reply-text", 
         text: replyText 
       }));
-      
+
       // 传递当前角色的语音模型
       const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
       playAudio(audioBuf.toString("base64"));
     } else if (data && data.type === "regenerate") {
       // 新增：处理重新生成AI回复的请求
-      console.log(`收到重新生成AI回复请求: ${data.text.substring(0, 30)}${data.text.length > 30 ? '...' : ''}`);
+      console.log(`[${connectionId}] 收到重新生成AI回复请求: ${data.text.substring(0, 30)}${data.text.length > 30 ? '...' : ''}`);
       const userText = data.text;
-      
+
       // 暂停当前播放（如果有的话）
       if (isPlaying) {
         isPlaying = false;
         pendingAudio = null;
       }
-      
+
       // 检查是否已选择角色
       if (!role) {
-        console.error("未选择角色，无法处理重新生成请求");
+        console.error(`[${connectionId}] 未选择角色，无法处理重新生成请求`);
         ws.send(JSON.stringify({ 
           type: "error", 
           msg: "请先选择一个角色" 
         }));
         return;
       }
-      
+
       // 判断是否使用英文语音包 (en_US开头的模型)
       const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
       const replyText = await chatWithOllama(role.system_prompt, userText, isEnglishVoice);
-      console.log(`重新生成AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
-      
+      console.log(`[${connectionId}] 重新生成AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
+
       ws.send(JSON.stringify({ 
         type: "reply-text", 
         text: replyText 
       }));
-      
+
       // 传递当前角色的语音模型
       const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
       playAudio(audioBuf.toString("base64"));
     }
   });
-  
-  ws.on("close", () => console.log("client disconnected"));
+
+  ws.on("close", () => console.log(`client disconnected [ID: ${connectionId}]`));
 });

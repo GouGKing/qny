@@ -39,6 +39,84 @@ html, body, .app-container {
   background: #a8a8a8;
 }
 
+/* 搜索相关样式 */
+.search-container {
+  position: relative;
+  width: 100%;
+  max-width: 500px;
+  margin-bottom: 20px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 15px 20px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 30px;
+  font-size: 1.1rem;
+  background: rgba(255, 255, 255, 0.9);
+  color: #333;
+  outline: none;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.search-input:focus {
+  border-color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 1);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.15);
+}
+
+.search-input::placeholder {
+  color: #9ca3af;
+}
+
+.clear-search-button {
+  position: absolute;
+  right: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #667eea;
+  border: none;
+  color: white;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+.clear-search-button:hover {
+  background: #764ba2;
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.search-results-info {
+  color: white;
+  font-size: 0.9rem;
+  margin-bottom: 20px;
+  opacity: 0.9;
+}
+
+.no-results {
+  grid-column: 1 / -1; /* 跨越所有列 */
+  text-align: center;
+  padding: 40px 20px;
+  color: #4a5568;
+  font-size: 1.1rem;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+}
+
 /* 首页样式 */
 .home-page {
   padding: 40px 20px;
@@ -49,6 +127,30 @@ html, body, .app-container {
   justify-content: center;
   align-items: center;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+/* 响应式搜索样式 */
+@media (max-width: 767px) {
+  .search-container {
+    max-width: 90%;
+  }
+  
+  .search-input {
+    padding: 12px 18px;
+    font-size: 1rem;
+  }
+  
+  .clear-search-button {
+    width: 24px;
+    height: 24px;
+    font-size: 16px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .search-container {
+    max-width: 400px;
+  }
 }
 
 .main-title {
@@ -78,10 +180,31 @@ html, body, .app-container {
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   display: flex;
   flex-direction: column;
-  align-items: center;
   box-shadow: 0 10px 30px rgba(0,0,0,0.1);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* 角色特征点容器 */
+.role-features {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #e2e8f0;
+}
+
+/* 单个特征点 */
+.feature-item {
+  margin-bottom: 6px;
+  padding-left: 2px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+}
+
+/* 角色卡片头部 - 头像和名称左右排列 */
+.role-header {
+  display: flex;
+  align-items: center;
 }
 
 .role-card:hover {
@@ -94,8 +217,8 @@ html, body, .app-container {
 }
 
 .role-image {
-  font-size: 3.5rem;
-  margin-bottom: 15px;
+  font-size: 2.5rem;
+  margin-right: 15px;
   color: #667eea;
   transition: transform 0.3s ease;
 }
@@ -105,18 +228,12 @@ html, body, .app-container {
 }
 
 .role-name {
-  margin: 8px 0;
+  margin: 0;
   font-size: 1.4rem;
   font-weight: 700;
   color: #2d3748;
 }
 
-.role-description {
-  font-size: 0.95rem;
-  color: #4a5568;
-  text-align: center;
-  line-height: 1.5;
-}
 
 /* 聊天页 */
 .chat-page {
@@ -136,11 +253,11 @@ html, body, .app-container {
 }
 
 .chat-header h2 {
-  display: flex;
+  display: block;
+  text-align: center;
   font-weight: 700;
   color: #1a202c;
   margin: 0;
-  font-size: 1.25rem;
 }
 
 /* 返回按钮样式 */
@@ -158,6 +275,13 @@ html, body, .app-container {
   color: #4a5568;
 }
 
+/* 对话界面标题中的头像样式 */
+.role-image-header {
+  font-size: 1.5rem;
+  margin-right: 8px;
+  display: inline-block;
+}
+
 .back-button:hover {
   background: #f7fafc;
   transform: translateX(-2px);
@@ -165,10 +289,10 @@ html, body, .app-container {
 
 /* 智能体模式按钮样式 */
 .robot-button {
+  font-size: 1.2rem;
   background: none;
   border: none;
   cursor: pointer;
-  padding: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -463,7 +587,6 @@ html, body, .app-container {
   }
   
   .role-card {
-    aspect-ratio: 1 / 1; /* 正方形 */
     justify-content: center;
     padding: 20px;
   }
@@ -480,6 +603,7 @@ html, body, .app-container {
   .ai-message {
     max-width: 85%;
     padding: 10px 15px;
+    margin-bottom: 15px;
   }
   
   .input-container {

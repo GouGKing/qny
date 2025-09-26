@@ -1,0 +1,184 @@
+.realtime-chat-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.realtime-chat-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  background-color: white;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.realtime-back-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.realtime-chat-header h2 {
+  text-transform: none;
+  margin: 0 20px;
+}
+
+.realtime-call-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background-color: #f8fafc;
+}
+
+.realtime-avatar-container {
+  font-size: 8rem;
+  margin-bottom: 30px;
+  filter: opacity(1);
+  transition: filter 0.3s ease;
+}
+
+.realtime-avatar-container.muted {
+  filter: opacity(0.5);
+}
+
+.realtime-status-text {
+  font-size: 1.5rem;
+  font-weight: bold;
+  margin-bottom: 20px;
+  color: #2d3748;
+}
+
+.realtime-call-info {
+  margin-bottom: 40px;
+  text-align: center;
+  color: #4a5568;
+}
+
+.realtime-call-info .realtime-role-name {
+  font-size: 1.2rem;
+  margin-bottom: 5px;
+}
+
+.realtime-call-info .realtime-call-hint {
+  font-size: 0.9rem;
+}
+
+.realtime-chat-history {
+  width: 100%;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 30px;
+  padding: 15px;
+  background-color: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+
+.realtime-chat-message {
+  margin-bottom: 15px;
+}
+
+.realtime-chat-message .realtime-user-text {
+  text-align: right;
+  margin-bottom: 5px;
+  font-weight: 500;
+  color: #4a5568;
+}
+
+.realtime-chat-message .realtime-ai-text {
+  text-align: left;
+  color: #2d3748;
+}
+
+.realtime-call-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  background-color: white;
+  border-top: 1px solid #e2e8f0;
+}
+
+.realtime-auxiliary-buttons {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 30px;
+  gap: 40px;
+}
+
+.realtime-auxiliary-buttons button {
+  background-color: transparent;
+  border: 2px solid #e2e8f0;
+  border-radius: 50%;
+  width: 60px;
+  height: 60px;
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: white;
+}
+
+.realtime-auxiliary-buttons button.muted,
+.realtime-auxiliary-buttons button.speakerphone {
+  background-color: #f7fafc;
+  border-color: #cbd5e0;
+}
+
+.realtime-hangup-button {
+  background-color: #ef4444;
+  border: none;
+  border-radius: 50%;
+  width: 80px;
+  height: 80px;
+  font-size: 2rem;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+  animation: realtime-pulse 1.5s ease-in-out infinite;
+}
+
+.realtime-combined-buttons {
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+}
+
+.realtime-record-button {
+  background-color: #3b82f6;
+  border: none;
+  border-radius: 50px;
+  padding: 15px 30px;
+  font-size: 1.2rem;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.realtime-record-button:hover {
+  background-color: #2563eb;
+}
+
+.realtime-duration-display {
+  margin-left: auto;
+  font-size: 1.2rem;
+  font-weight: bold;
+}
+
+@keyframes realtime-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+  }
+}
