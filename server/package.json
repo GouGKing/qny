@@ -3,8 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start:api": "node server.js",
-    "start:ws": "node realtime.js",
+    "start": "node server.js",
     "init-db": "node init-db.js"
   },
   "dependencies": {

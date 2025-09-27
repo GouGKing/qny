@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useState, useRef, useEffect } from 'react';
 import RealtimeChat from "./components/RealtimeChat";
 import './App.css';
 
@@ -26,6 +26,8 @@ export default function App() {
   // 新增：搜索相关状态
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredRoles, setFilteredRoles] = useState([]);
+  // 新增：LLM选择相关状态
+  const [selectedLLM, setSelectedLLM] = useState('deepseek/deepseek-v3.1-terminus'); // 默认选择deepseek
 
   useEffect(() => {
     fetch("http://localhost:3000/api/roles")
@@ -37,7 +39,7 @@ export default function App() {
         console.log('已加载角色列表，当前选择角色ID:', roleId);
       });
 
-    const ws = new WebSocket("ws://localhost:3001");
+    const ws = new WebSocket("ws://localhost:3000");
     ws.onopen = () => console.log("ws open");
     ws.onmessage = (e) => {
       console.log('收到WebSocket消息:', e.data);
@@ -50,7 +52,7 @@ export default function App() {
         } else if (data.type === "error") {
           console.error('服务器错误:', data.msg);
           // 显示错误消息给用户
-          alert(`错误: ${data.msg}`);
+          alert(`请稍后重试！`);
         } 
         // 不再为user-text类型消息添加新的聊天记录，避免重复显示
         else if (data.type === "user-text") {
@@ -224,7 +226,11 @@ export default function App() {
 
   function stopRecording() {
     if (mediaRecorderRef.current) mediaRecorderRef.current.stop();
-    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ 
+      type: "stop", 
+      isAgentMode, 
+      llm: selectedLLM 
+    }));
     setRecording(false);
   }
 
@@ -234,11 +240,12 @@ export default function App() {
       console.log('发送文本消息:', text);
       // 先更新UI显示用户输入
       setChat(prev => [...prev, { user: text, role: "AI正在思考..." }]);
-      // 再发送给服务器，包含智能体模式标识
+      // 再发送给服务器，包含智能体模式标识和LLM模型选择
       socket.send(JSON.stringify({ 
         type: "text", 
         text, 
-        isAgentMode 
+        isAgentMode, 
+        llm: selectedLLM 
       }));
       // 重置暂停状态
       setIsPaused(false);
@@ -264,9 +271,13 @@ export default function App() {
         return newChat;
       });
       
-      // 发送重新生成请求到服务器
+      // 发送重新生成请求到服务器，包含LLM模型选择
       const userMessage = chat[index].user;
-      socket.send(JSON.stringify({ type: "regenerate", text: userMessage }));
+      socket.send(JSON.stringify({ 
+        type: "regenerate", 
+        text: userMessage, 
+        llm: selectedLLM 
+      }));
       
       // 重置暂停状态
       setIsPaused(false);
@@ -277,7 +288,7 @@ export default function App() {
   const pausePlayback = () => {
     if (socket && socket.readyState === WebSocket.OPEN) {
       console.log('发送暂停请求');
-      socket.send(JSON.stringify({ type: "pause" }));
+      socket.send(JSON.stringify({ type: "pause", isAgentMode }));
     }
   };
 
@@ -285,7 +296,7 @@ export default function App() {
   const resumePlayback = () => {
     if (socket && socket.readyState === WebSocket.OPEN) {
       console.log('发送恢复请求');
-      socket.send(JSON.stringify({ type: "resume" }));
+      socket.send(JSON.stringify({ type: "resume", isAgentMode }));
     }
   };
 
@@ -323,6 +334,7 @@ export default function App() {
           onExit={() => setShowRealtime(false)} 
           roleAvatars={roleAvatars} 
           selectedRole={selectedRole}
+          selectedLLM={selectedLLM}
         /> 
       ) : showHome ? (
         // 主页界面
@@ -445,6 +457,20 @@ export default function App() {
               sendTextMessage(input.value);
               input.value = '';
             }}>发送</button>
+          </div>
+
+          {/* 语言模型选择器 - 移动到输入框下方 */}
+          <div className="llm-selector">
+            <label htmlFor="llm-select">选择语言模型:</label>
+            <select 
+              id="llm-select" 
+              value={selectedLLM} 
+              onChange={(e) => setSelectedLLM(e.target.value)}
+            >
+              <option value="deepseek">DeepSeek</option>
+              <option value="mistral">Ollama Mistral</option>
+              
+            </select>
           </div>
 
           <div className="combined-buttons">

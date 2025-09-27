@@ -651,3 +651,102 @@ html, body, .app-container {
     margin: 0 auto;
   }
 }
+
+/* 语言模型选择器样式 */
+.llm-selector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 15px 20px;
+  background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
+  border-top: 1px solid #cbd5e0;
+  border-bottom: 1px solid #cbd5e0;
+  transition: all 0.3s ease;
+}
+
+.llm-selector label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #4a5568;
+  margin-right: 12px;
+  white-space: nowrap;
+}
+
+.llm-selector select {
+  background: white;
+  border: 2px solid #cbd5e0;
+  border-radius: 24px;
+  padding: 8px 16px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: #2d3748;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 160px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.llm-selector select:hover {
+  border-color: #a0aec0;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.llm-selector select:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* 美化选项样式 */
+.llm-selector select option {
+  padding: 10px;
+  background: white;
+  color: #2d3748;
+  font-family: inherit;
+}
+
+.llm-selector select option:hover,
+.llm-selector select option:checked {
+  background: #667eea;
+  color: white;
+}
+
+/* 响应式样式调整 */
+@media (max-width: 767px) {
+  .llm-selector {
+    padding: 12px 15px;
+  }
+  
+  .llm-selector label {
+    margin-right: 0;
+    text-align: center;
+  }
+  
+  .llm-selector select {
+    width: 100%;
+    min-width: auto;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .llm-selector {
+    justify-content: center;
+  }
+}
+
+/* 动画效果 */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.llm-selector {
+  animation: fadeInUp 0.3s ease-out;
+}
