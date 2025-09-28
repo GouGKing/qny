@@ -25,7 +25,6 @@ const logger = {
   error: (...args) => console.error(`[ERROR] ${args.join(' ')}`),
   debug: (...args) => console.log(`[DEBUG] ${args.join(' ')}`),
   monitorWebSocketMessages: (ws) => {
-    // 简单的WebSocket消息监控实现
     const originalSend = ws.send;
     ws.send = function(message, options, callback) {
       console.log(`[WebSocket] 发送消息: ${message.length > 100 ? message.substring(0, 100) + '...' : message}`);
@@ -33,7 +32,6 @@ const logger = {
     };
   },
   monitorTranscribeBuffer: (transcribeFunc) => {
-    // 监控语音转文字函数的执行
     return async (buffer) => {
       console.log(`[Transcribe] 开始处理音频，大小: ${buffer.length} 字节`);
       try {
@@ -93,7 +91,6 @@ async function chatWithOllama(systemPrompt, userInput, isEnglishVoice = false) {
     const responseText = await resp.text();
     console.log(`[Ollama] 原始响应: ${responseText.substring(0, 200)}${responseText.length > 200 ? '...' : ''}`);
     
-    // 检查响应是否包含多个 JSON 对象（流式响应）
     if (responseText.includes('\n')) {
       const lines = responseText.trim().split('\n');
       let lastValidJson = null;
@@ -124,7 +121,6 @@ async function chatWithOllama(systemPrompt, userInput, isEnglishVoice = false) {
   
   console.log(`[Ollama] 解析后的数据:`, JSON.stringify(data).substring(0, 100) + (JSON.stringify(data).length > 100 ? '...' : ''));
   
-  // 增强的响应解析逻辑，处理各种可能的响应格式
   if (data?.message?.content) return data.message.content;
   if (data?.response) return data.response;
   if (data?.content) return data.content;
@@ -138,7 +134,6 @@ async function chatWithDeepSeek(systemPrompt, userInput, isEnglishVoice = false)
   try {
     console.log(`向DeepSeek发送请求 - 用户输入: ${userInput.substring(0, 30)}${userInput.length > 30 ? '...' : ''}`);
     
-    // 如果使用英文语音包，在系统提示中添加英文回复要求
     let finalSystemPrompt = systemPrompt;
     if (isEnglishVoice) {
       finalSystemPrompt = `${systemPrompt}\n\n重要要求：请一定用英语回答，不要使用任何中文。所有回复内容必须是英文。`;
@@ -176,7 +171,6 @@ async function chatWithDeepSeek(systemPrompt, userInput, isEnglishVoice = false)
       return "抱歉，我暂时无法回答。";
     }
     
-    // 检查响应格式
     if (data?.choices?.[0]?.message?.content) return data.choices[0].message.content;
     if (data?.response) return data.response;
     if (data?.content) return data.content;
@@ -191,215 +185,186 @@ async function chatWithDeepSeek(systemPrompt, userInput, isEnglishVoice = false)
 
 // ====== 统一的LLM调用入口 ======
 async function chatWithLLM(systemPrompt, userInput, llm = 'deepseek', isEnglishVoice = false) {
-  // 根据选择的LLM决定调用哪个模型
   if (llm === 'mistral') {
     return await chatWithOllama(systemPrompt, userInput, isEnglishVoice);
-    
   } else {
-    // 
     return await chatWithDeepSeek(systemPrompt, userInput, isEnglishVoice);
   }
 }
 
-// ====== 语音转文字 - 修复版，集成详细日志和错误处理 ======
-function transcribeBuffer(buffer) {
+// ====== 语音转文字 - 修复版（使用 ffmpeg stdin 管道，避免临时原始文件竞争） ======
+function transcribeBuffer(buffer, options = {}) {
   return new Promise((resolve, reject) => {
-    let tmpRaw, tmpWav;
-    
-    try {
-      // 生成唯一的临时文件名，避免并发冲突
-      const timestamp = Date.now();
-      const randomId = Math.random().toString(36).substring(2, 8);
-      tmpRaw = path.join(__dirname, `tmp_recv_input_${timestamp}_${randomId}`);
-      tmpWav = path.join(__dirname, `tmp_recv_${timestamp}_${randomId}.wav`);
+    // 输出 wav 仍然使用唯一文件，避免并发冲突
+    const timestamp = Date.now();
+    const randomId = Math.random().toString(36).substring(2, 8);
+    const tmpWav = path.join(__dirname, `tmp_recv_${timestamp}_${randomId}.wav`);
+    const ffmpegTimeoutMs = options.ffmpegTimeoutMs || 20_000; // 20s 超时可调整
 
-      console.log(`[STT] 开始处理音频，大小: ${buffer.length} 字节`);
-      console.log(`[STT] 使用临时文件: ${tmpRaw}`);
+    console.log(`[STT] transcribeBuffer: 准备将 buffer 通过 ffmpeg 转为 wav -> ${tmpWav}`);
 
-      // 清理可能存在的旧文件
-      try {
-        if (fs.existsSync(tmpRaw)) fs.unlinkSync(tmpRaw);
-        if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav);
-      } catch (cleanupErr) {
-        console.warn("[STT] 清理旧文件时出错:", cleanupErr.message);
+    let ffmpegExited = false;
+    let ffmpegStderr = "";
+
+    // 启动 ffmpeg，输入从 stdin(pipe:0)
+    const ffmpegArgs = [
+      "-y",
+      "-f", "webm",        // 输入容器格式
+      "-c:a", "opus",      // 输入音频编码
+      "-i", "pipe:0",      // 从 stdin 读取
+      "-ar", "16000",
+      "-ac", "1",
+      "-c:a", "pcm_s16le",
+      tmpWav
+    ];
+
+    const ffmpeg = spawn("ffmpeg", ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    // 捕获 stderr 便于问题定位
+    ffmpeg.stderr.on("data", (d) => {
+      const s = d.toString();
+      ffmpegStderr += s;
+      console.log("[FFmpeg]", s);
+    });
+
+    ffmpeg.on("error", (err) => {
+      console.error("[STT] FFmpeg spawn 错误:", err);
+    });
+
+    const ffmpegTimer = setTimeout(() => {
+      if (!ffmpegExited) {
+        console.warn("[STT] FFmpeg 超时，尝试杀死进程");
+        try { ffmpeg.kill("SIGKILL"); } catch (e) { /* ignore */ }
+      }
+    }, ffmpegTimeoutMs);
+
+    ffmpeg.on("close", (code, signal) => {
+      ffmpegExited = true;
+      clearTimeout(ffmpegTimer);
+
+      if (code !== 0) {
+        console.error(`[STT] ffmpeg 转码失败，退出码: ${code}, 信号: ${signal}`);
+        console.error(`[STT] ffmpeg stderr: ${ffmpegStderr}`);
+        // 尝试删除可能的残留文件
+        try { if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav); } catch (e) { console.warn("[STT] 删除 tmpWav 失败:", e.message); }
+        return reject(new Error(`ffmpeg 转码失败: ${ffmpegStderr}`));
       }
 
-      // 保存客户端传来的 buffer（可能是 webm/ogg/pcm）
-      fs.writeFileSync(tmpRaw, buffer);
-      console.log(`[STT] 已保存原始音频: ${tmpRaw}, 大小 ${buffer.length} 字节`);
-
-      // 验证文件是否写入成功
-      const savedSize = fs.statSync(tmpRaw).size;
-      if (savedSize !== buffer.length) {
-        console.error(`[STT] 文件写入大小不匹配: 期望 ${buffer.length}, 实际 ${savedSize}`);
-        return reject(new Error("音频文件写入失败"));
+      // 确认 wav 文件存在
+      if (!fs.existsSync(tmpWav)) {
+        console.error("[STT] ffmpeg 完成但未生成 wav 文件");
+        return reject(new Error("ffmpeg 未生成输出文件"));
       }
 
-      // 调用 ffmpeg 转换成标准 wav
-      const ffmpeg = spawn("ffmpeg", [
-        "-y",
-        "-i", tmpRaw,
-        "-ar", "16000",
-        "-ac", "1",
-        "-c:a", "pcm_s16le",
+      // 运行 whisper-cli，读取 wav 转文本
+      const whisperExec = path.join(__dirname, "../whisper.cpp/build/bin/Release/whisper-cli.exe");
+      const modelPath   = path.join(__dirname, "../whisper.cpp/build/bin/Release/ggml-medium.bin");
+
+      console.log(`[STT] 调用 Whisper: ${whisperExec} -m ${modelPath} -otxt -l auto -np ${tmpWav}`);
+
+      const whisper = spawn(whisperExec, [
+        "-m", modelPath,
+        "-otxt",
+        "-l", "auto",
+        "-np",
         tmpWav
-      ], {
-        stdio: ['ignore', 'pipe', 'pipe']
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      let whisperStdout = "";
+      let whisperStderr = "";
+      let whisperExited = false;
+
+      whisper.stdout.on("data", (d) => {
+        const s = d.toString();
+        whisperStdout += s;
+        console.log("[Whisper]", s);
       });
 
-      let ffmpegStderr = "";
-      ffmpeg.stderr.on("data", (d) => {
-        const output = d.toString();
-        ffmpegStderr += output;
-        console.log("[FFmpeg]", output);
+      whisper.stderr.on("data", (d) => {
+        const s = d.toString();
+        whisperStderr += s;
+        console.error("[Whisper ERR]", s);
       });
 
-      ffmpeg.on("close", (code) => {
-        // 清理临时原始文件
-        try {
-          if (fs.existsSync(tmpRaw)) fs.unlinkSync(tmpRaw);
-        } catch (cleanupErr) {
-          console.warn("[STT] 清理临时文件时出错:", cleanupErr.message);
+      const whisperTimer = setTimeout(() => {
+        if (!whisperExited) {
+          console.warn("[STT] Whisper 超时，尝试杀死进程");
+          try { whisper.kill("SIGKILL"); } catch (e) { /* ignore */ }
         }
+      }, 30_000);
 
-        if (code !== 0) {
-          console.error(`[STT] ffmpeg 转码失败，退出码: ${code}`);
-          console.error(`[STT] ffmpeg 错误输出: ${ffmpegStderr}`);
-          return reject(new Error(`ffmpeg 转码失败: ${ffmpegStderr}`));
-        }
-        
-        if (!fs.existsSync(tmpWav)) {
-          console.error("[STT] ffmpeg 转码完成但未生成输出文件");
-          return reject(new Error("ffmpeg 转码未生成输出文件"));
-        }
-        
-        console.log(`[STT] 转码完成: ${tmpWav}`);
+      whisper.on("close", (whisperCode, whisperSignal) => {
+        whisperExited = true;
+        clearTimeout(whisperTimer);
 
-        // whisper-cli 路径
-        const whisperExec = path.join(__dirname, "../whisper.cpp/build/bin/Release/whisper-cli.exe");
-        const modelPath   = path.join(__dirname, "../whisper.cpp/build/bin/Release/ggml-medium.bin");
+        const txtFile = tmpWav + ".txt";
+        let textResult = "";
 
-        console.log(`[STT] 调用 Whisper: ${whisperExec}`);
-
-        const whisper = spawn(whisperExec, [
-          "-m", modelPath,
-          "-otxt",
-          "-l", "auto",       // 自动检测语言（中英混合）
-          "-np",
-          tmpWav
-        ], {
-          stdio: ['ignore', 'pipe', 'pipe']
-        });
-
-        let whisperStdout = "";
-        let whisperStderr = "";
-        
-        whisper.stdout.on("data", (d) => {
-          const output = d.toString();
-          whisperStdout += output;
-          console.log("[Whisper]", output);
-        });
-        
-        whisper.stderr.on("data", (d) => {
-          const output = d.toString();
-          whisperStderr += output;
-          console.error("[Whisper ERR]", output);
-        });
-
-        whisper.on("close", (whisperCode) => {
-          // 清理临时文件
+        if (fs.existsSync(txtFile)) {
           try {
-            if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav);
-          } catch (cleanupErr) {
-            console.warn("[STT] 清理临时文件时出错:", cleanupErr.message);
+            textResult = fs.readFileSync(txtFile, "utf-8").trim();
+            // 删除 txt 文件
+            try { fs.unlinkSync(txtFile); } catch (e) { console.warn("[STT] 删除 txt 文件失败:", e.message); }
+          } catch (readErr) {
+            console.error("[STT] 读取 txt 文件失败:", readErr);
           }
+        } else {
+          // 如果没有 txt 文件但 whisperCode 为 0，尝试根据 stdout 内容获取
+          if (whisperCode === 0 && whisperStdout) {
+            textResult = whisperStdout.trim();
+          }
+        }
 
-          const txtFile = tmpWav + ".txt";
-          if (fs.existsSync(txtFile)) {
-            try {
-              const text = fs.readFileSync(txtFile, "utf-8").trim();
-              console.log(`[STT] 转文字成功: ${text}`);
-              
-              // 清理文本文件
-              try {
-                fs.unlinkSync(txtFile);
-              } catch (cleanupErr) {
-                console.warn("[STT] 清理文本文件时出错:", cleanupErr.message);
-              }
-              
-              resolve(text);
-            } catch (readErr) {
-              console.error("[STT] 读取文本文件失败:", readErr);
-              resolve("");
-            }
-          } else {
-            console.error(`[STT] 未找到输出文件: ${txtFile}`);
-            if (whisperCode !== 0) {
-              console.error(`[STT] Whisper 退出码: ${whisperCode}`);
-              console.error(`[STT] Whisper 错误: ${whisperStderr}`);
-            }
-            resolve("");
-          }
-        });
+        // 清理 wav
+        try { if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav); } catch (e) { console.warn("[STT] 删除 wav 文件失败:", e.message); }
 
-        whisper.on("error", (err) => {
-          console.error("[STT] Whisper 调用错误:", err);
-          
-          // 清理临时文件
-          try {
-            if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav);
-            const txtFile = tmpWav + ".txt";
-            if (fs.existsSync(txtFile)) fs.unlinkSync(txtFile);
-          } catch (cleanupErr) {
-            console.warn("[STT] 清理临时文件时出错:", cleanupErr.message);
-          }
-          
-          reject(err);
-        });
+        if (!textResult) {
+          console.warn(`[STT] 未能从 Whisper 获取文本，whisperCode=${whisperCode}, stderr=${whisperStderr}`);
+          // 返回空字符串而不是 reject，让上层决定是否重试
+          return resolve("");
+        }
+
+        console.log(`[STT] 转文字成功: ${textResult}`);
+        resolve(textResult);
       });
 
-      ffmpeg.on("error", (err) => {
-        console.error("[STT] FFmpeg 调用错误:", err);
-        
-        // 清理临时文件
-        try {
-          if (fs.existsSync(tmpRaw)) fs.unlinkSync(tmpRaw);
-          if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav);
-        } catch (cleanupErr) {
-          console.warn("[STT] 清理临时文件时出错:", cleanupErr.message);
-        }
-        
+      whisper.on("error", (err) => {
+        clearTimeout(whisperTimer);
+        console.error("[STT] Whisper spawn 错误:", err);
+        try { if (fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav); } catch (e) { console.warn("[STT] 删除 tmpWav 失败:", e.message); }
         reject(err);
       });
+    });
 
+    // 将 buffer 写入 ffmpeg stdin，然后关闭 stdin
+    try {
+      ffmpeg.stdin.write(buffer, (err) => {
+        if (err) {
+          console.error("[STT] 写入 ffmpeg stdin 失败:", err);
+          try { ffmpeg.kill("SIGKILL"); } catch (e) {}
+          return reject(err);
+        }
+        ffmpeg.stdin.end();
+      });
     } catch (err) {
-      console.error("[STT] 转文字处理错误:", err);
-      
-      // 清理临时文件
-      try {
-        if (tmpRaw && fs.existsSync(tmpRaw)) fs.unlinkSync(tmpRaw);
-        if (tmpWav && fs.existsSync(tmpWav)) fs.unlinkSync(tmpWav);
-      } catch (cleanupErr) {
-        console.warn("[STT] 清理临时文件时出错:", cleanupErr.message);
-      }
-      
+      clearTimeout(ffmpegTimer);
+      console.error("[STT] 向 ffmpeg 写入 buffer 时异常:", err);
+      try { ffmpeg.kill("SIGKILL"); } catch (e) {}
       reject(err);
     }
   });
 }
 
-// ====== 调用 Piper TTS (使用修复后的tts.py) ======
+// ====== 调用 Piper TTS (使用修复后的tts.py)，改为使用唯一临时文本文件名以避免冲突 ======
 function synthesizeSpeech(text, voiceModel = null) {
   return new Promise((resolve, reject) => {
-    const outFile = path.join(__dirname, "reply.wav");
+    const outFile = path.join(__dirname, `reply_${Date.now()}_${Math.random().toString(36).slice(2,8)}.wav`);
     console.log(`[TTS] 正在调用TTS生成音频: "${text.substring(0, 20)}${text.length > 20 ? '...' : ''}"`);
     console.log(`[TTS] 当前语音模型: ${voiceModel || '未指定'}`);
-    
-    // 构建命令参数，根据是否提供voiceModel决定是否添加第四个参数
-    // 使用文件传递文本内容，避免命令行参数编码问题
-    const textFile = path.join(__dirname, "tts_text.txt");
+
+    const textFile = path.join(__dirname, `tts_text_${Date.now()}_${Math.random().toString(36).slice(2,8)}.txt`);
     fs.writeFileSync(textFile, text, 'utf-8');
-    
+
     const args = ["tts.py", textFile, outFile];
     if (voiceModel) {
       args.push(voiceModel);
@@ -407,24 +372,23 @@ function synthesizeSpeech(text, voiceModel = null) {
     } else {
       console.log(`[TTS] 未指定语音模型，将使用tts.py的默认逻辑`);
     }
-    
-    // 调用tts.py，传递所有必要参数
+
     const py = spawn("python", args, { encoding: 'utf-8' });
     let stdout = "";
     let stderr = "";
-    
+
     py.stdout.on("data", (d) => {
       const output = d.toString('utf-8');
       stdout += output;
       console.log("tts:", output);
     });
-    
+
     py.stderr.on("data", (d) => {
       const error = d.toString('utf-8');
       stderr += error;
       console.error("tts err:", error);
     });
-    
+
     py.on("close", (code) => {
       // 清理临时文本文件
       try {
@@ -434,25 +398,31 @@ function synthesizeSpeech(text, voiceModel = null) {
       } catch (err) {
         console.error(`[Error] 清理临时文本文件失败: ${err}`);
       }
-      
+
       if (code !== 0) {
         console.error(`[Error] TTS处理失败，退出码: ${code}`);
         console.error(`stderr: ${stderr}`);
-        
-        // 如果TTS失败，生成一个简单的提示音作为后备
+
         if (!fs.existsSync(outFile) || fs.statSync(outFile).size === 0) {
           generateBackupBeep(outFile);
         }
       }
-      
+
       try {
         const audio = fs.readFileSync(outFile);
         console.log(`[Success] TTS音频生成成功，大小: ${audio.length} 字节`);
+        // 不删除 outFile，让静态服务可以直接访问（和你原来逻辑一致）
         resolve(audio);
       } catch (err) {
         console.error("[Error] 无法读取音频文件:", err);
         reject(err);
       }
+    });
+
+    py.on("error", (err) => {
+      console.error("[Error] 启动TTS进程失败:", err);
+      try { if (fs.existsSync(textFile)) fs.unlinkSync(textFile); } catch (e) {}
+      reject(err);
     });
   });
 }
@@ -474,7 +444,6 @@ function generateBackupBeep(filePath) {
     buffer.writeInt16LE(intSample, i * 2);
   }
   
-  // 写入WAV文件头
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
   header.writeUInt32LE(36 + buffer.length, 4);
@@ -489,14 +458,12 @@ function generateBackupBeep(filePath) {
   header.writeUInt16LE(16, 34); // 采样位数
   header.write('data', 36);
   header.writeUInt32LE(buffer.length, 40);
-  
-  // 组合头部和数据
   const wavFile = Buffer.concat([header, buffer]);
   fs.writeFileSync(filePath, wavFile);
-  
   console.log("[Warning] 生成了后备提示音");
 }
-// ====== Whisper STT (call whisper.cpp executable) ======
+
+// ====== Whisper STT (call whisper.cpp executable) - 保留用于文件路径版本（如果你有需要） ======
 function transcribeAudio(filePath) {
   return new Promise((resolve, reject) => {
     const whisperExec = path.join(
@@ -531,7 +498,6 @@ function transcribeAudio(filePath) {
     });
   });
 }
-
 
 // ====== REST API ======
 
@@ -586,7 +552,7 @@ app.post("/api/voice-chat", upload.single("audio"), async (req, res) => {
     const audioPath = req.file.path;
     const wavPath = audioPath.replace(path.extname(audioPath), ".wav");
 
-    // ffmpeg 转换成 wav (16k 单声道)
+    // ffmpeg 转换成 wav (16k 单声道) - 使用文件方式保留为后备（但一般建议使用 transcribeBuffer）
     await new Promise((resolve, reject) => {
       const ffmpeg = spawn("ffmpeg", [
         "-y", "-i", audioPath,
@@ -596,6 +562,7 @@ app.post("/api/voice-chat", upload.single("audio"), async (req, res) => {
         if (code === 0) resolve();
         else reject(new Error("ffmpeg 转码失败"));
       });
+      ffmpeg.on("error", (err) => reject(err));
     });
 
     const text = await transcribeAudio(wavPath);
@@ -621,26 +588,17 @@ app.use(express.static(__dirname));
 const frontendDistPath = path.join(__dirname, '../client/dist');
 if (fs.existsSync(frontendDistPath)) {
   console.log(`📁 前端构建文件目录已找到: ${frontendDistPath}`);
-  
-  // 提供前端静态文件服务
   app.use(express.static(frontendDistPath));
-  
-  // 处理SPA路由 - 将所有非API请求重定向到index.html
   app.get('*', (req, res, next) => {
-    // 跳过API路由
     if (req.path.startsWith('/api/')) {
       next();
       return;
     }
-    
-    // 检查请求的文件是否存在
     const filePath = path.join(frontendDistPath, req.path);
     if (fs.existsSync(filePath) && !fs.lstatSync(filePath).isDirectory()) {
       next();
       return;
     }
-    
-    // 否则返回index.html让前端路由处理
     res.sendFile(path.join(frontendDistPath, 'index.html'));
   });
 } else {
@@ -658,10 +616,8 @@ const server = app.listen(3000, () => {
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws) => {
-  // 为每个连接生成唯一标识，用于调试
   const connectionId = Math.random().toString(36).substring(2, 10);
   console.log(`client connected [ID: ${connectionId}]`);
-  // 设置默认角色（如果存在的话），避免未选择角色导致的错误
   let role = db.prepare("SELECT * FROM roles LIMIT 1").get();
   if (role) {
     console.log(`[${connectionId}] 已自动选择默认角色: ${role.name} [voice_model: ${role.voice_model}]`);
@@ -670,13 +626,11 @@ wss.on("connection", (ws) => {
     role = null;
   }
   let chunks = [];
-  let isPlaying = false; // 新增：跟踪当前是否正在播放语音
-  let pendingAudio = null; // 新增：存储暂停时的待播放音频
+  let isPlaying = false;
+  let pendingAudio = null;
 
-  // 使用监控版本的WebSocket消息处理
   logger.monitorWebSocketMessages(ws);
 
-  // 新增：播放音频的函数，支持暂停/恢复
   function playAudio(audioData) {
     if (!isPlaying) {
       isPlaying = true;
@@ -692,7 +646,6 @@ wss.on("connection", (ws) => {
   ws.on("message", async (msg) => {
     console.log(`[${connectionId}] 收到客户端消息`);
     let data;
-
     try {
       data = JSON.parse(msg.toString());
       console.log(`[${connectionId}] 解析消息成功`, { type: data.type });
@@ -701,14 +654,11 @@ wss.on("connection", (ws) => {
       data = null;
     }
 
-    // 增强的错误处理包装器
     const safeExecute = async (operation) => {
       try {
         await operation();
       } catch (error) {
         console.error(`[${connectionId}] 操作执行失败:`, error);
-        
-        // 发送错误信息给客户端
         try {
           ws.send(JSON.stringify({ 
             type: "error", 
@@ -717,8 +667,6 @@ wss.on("connection", (ws) => {
         } catch (sendError) {
           console.error(`[${connectionId}] 发送错误消息失败:`, sendError);
         }
-        
-        // 重置状态，确保下次操作正常
         chunks = [];
         isPlaying = false;
         pendingAudio = null;
@@ -726,56 +674,36 @@ wss.on("connection", (ws) => {
     };
 
     if (data && data.type === "config") {
-      // 添加更详细的角色切换日志
       console.log(`[${connectionId}] 收到角色配置请求: roleId=${data.roleId}`);
       role = db.prepare("SELECT * FROM roles WHERE id = ?").get(data.roleId);
       if (role) {
         console.log(`[${connectionId}] 角色切换为: ${role.name} [voice_model: ${role.voice_model}]`);
-        ws.send(JSON.stringify({ 
-          type: "info", 
-          msg: `角色切换：${role.name}` 
-        }));
+        ws.send(JSON.stringify({ type: "info", msg: `角色切换：${role.name}` }));
       } else {
         console.error(`[${connectionId}] 未找到ID为${data.roleId}的角色`);
-        ws.send(JSON.stringify({ 
-          type: "error", 
-          msg: "未找到该角色" 
-        }));
+        ws.send(JSON.stringify({ type: "error", msg: "未找到该角色" }));
       }
     } else if (data && data.type === "pause") {
-      // 新增：处理暂停请求
       isPlaying = false;
       console.log(`[${connectionId}] 暂停播放音频`);
       ws.send(JSON.stringify({ type: "pause-ack" }));
     } else if (data && data.type === "resume") {
-      // 新增：处理恢复请求
       if (pendingAudio) {
         isPlaying = true;
         console.log(`[${connectionId}] 恢复播放音频`);
-        ws.send(JSON.stringify({ 
-          type: "reply-audio", 
-          audio: pendingAudio, 
-          isPaused: false 
-        }));
+        ws.send(JSON.stringify({ type: "reply-audio", audio: pendingAudio, isPaused: false }));
         pendingAudio = null;
       }
       ws.send(JSON.stringify({ type: "resume-ack" }));
     } else if (data && data.type === "interview-start") {
       await safeExecute(async () => {
-        // 处理面试开始消息
         console.log(`[${connectionId}] 收到面试开始消息: ${data.question}`);
-        
-        // 检查是否已选择角色
         if (!role) {
           console.error(`[${connectionId}] 未选择角色，无法开始面试`);
-          ws.send(JSON.stringify({ 
-            type: "error", 
-            msg: "请先选择一个角色" 
-          }));
+          ws.send(JSON.stringify({ type: "error", msg: "请先选择一个角色" }));
           return;
         }
 
-        // 构建面试官角色的系统提示
         const interviewSystemPrompt = `你是一位专业的面试官，正在对候选人进行面试。请以专业、友好的态度进行面试。
 
 当前面试问题：${data.question}
@@ -794,31 +722,19 @@ wss.on("connection", (ws) => {
         
         console.log(`[${connectionId}] 面试开始回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
 
-        ws.send(JSON.stringify({ 
-          type: "reply-text", 
-          text: replyText 
-        }));
-
-        // 传递当前角色的语音模型
+        ws.send(JSON.stringify({ type: "reply-text", text: replyText }));
         const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
         playAudio(audioBuf.toString("base64"));
       });
     } else if (data && data.type === "interview-question") {
       await safeExecute(async () => {
-        // 处理面试问题消息
         console.log(`[${connectionId}] 收到面试问题消息: ${data.question}`);
-        
-        // 检查是否已选择角色
         if (!role) {
           console.error(`[${connectionId}] 未选择角色，无法处理面试问题`);
-          ws.send(JSON.stringify({ 
-            type: "error", 
-            msg: "请先选择一个角色" 
-          }));
+          ws.send(JSON.stringify({ type: "error", msg: "请先选择一个角色" }));
           return;
         }
 
-        // 构建面试官角色的系统提示
         const interviewSystemPrompt = `你是一位专业的面试官，正在对候选人进行面试。请以专业、友好的态度进行面试。
 
 当前面试问题：${data.question}
@@ -838,60 +754,39 @@ wss.on("connection", (ws) => {
         
         console.log(`[${connectionId}] 面试问题回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
 
-        ws.send(JSON.stringify({ 
-          type: "reply-text", 
-          text: replyText 
-        }));
-
-        // 传递当前角色的语音模型
+        ws.send(JSON.stringify({ type: "reply-text", text: replyText }));
         const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
         playAudio(audioBuf.toString("base64"));
       });
     } else if (data && data.type === "text") {
       await safeExecute(async () => {
-        // 处理纯文本消息
         console.log(`[${connectionId}] 收到纯文本消息: ${data.text.substring(0, 30)}${data.text.length > 30 ? '...' : ''}`);
         const userText = data.text;
         const llm = data.llm || DEFAULT_LLM;
         console.log(`[${connectionId}] 选择的LLM模型: ${llm}`);
         
-        ws.send(JSON.stringify({ 
-          type: "user-text", 
-          text: userText 
-        }));
+        ws.send(JSON.stringify({ type: "user-text", text: userText }));
 
-        // 暂停当前播放（如果有的话）
         if (isPlaying) {
           isPlaying = false;
           pendingAudio = null;
         }
 
-        // 检查是否已选择角色
         if (!role) {
           console.error(`[${connectionId}] 未选择角色，无法处理消息`);
-          ws.send(JSON.stringify({ 
-            type: "error", 
-            msg: "请先选择一个角色" 
-          }));
+          ws.send(JSON.stringify({ type: "error", msg: "请先选择一个角色" }));
           return;
         }
 
-        // 判断是否使用英文语音包 (en_US开头的模型)
         const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
         const replyText = await chatWithLLM(role.system_prompt, userText, llm, isEnglishVoice);
         console.log(`[${connectionId}] AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
 
-        ws.send(JSON.stringify({ 
-          type: "reply-text", 
-          text: replyText 
-        }));
-
-        // 传递当前角色的语音模型
+        ws.send(JSON.stringify({ type: "reply-text", text: replyText }));
         const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
         playAudio(audioBuf.toString("base64"));
       });
     } else if (data && data.type === "audio-chunk") {
-      // 新增：检查用户是否已选择角色，如果未选择，则提醒用户
       if (!role) {
         console.warn(`[${connectionId}] 警告：未选择角色就开始发送音频数据`);
       }
@@ -903,90 +798,62 @@ wss.on("connection", (ws) => {
 
         console.log(`[${connectionId}] 开始处理语音转文字，音频大小: ${full.length} 字节`);
 
-        // 使用监控版本的transcribeBuffer函数
+        // 使用改进版 transcribeBuffer（直接管道到 ffmpeg）
         const userText = await logger.monitorTranscribeBuffer(transcribeBuffer)(full);
         console.log(`[${connectionId}] 语音转文字结果: ${userText}`);
         const llm = data.llm || DEFAULT_LLM;
         console.log(`[${connectionId}] 选择的LLM模型: ${llm}`);
 
-        // 再次检查转文字结果，确保不包含文件路径信息
         if (userText.includes('tmp_recv') || userText.includes('path') || userText.includes('D:\\')) {
           console.error(`[${connectionId}] ⚠️ 严重警告: 语音转文字结果包含文件路径信息: "${userText}"`);
-          // 发送一个安全的默认文本，而不是可能包含敏感信息的文本
           ws.send(JSON.stringify({ type:"user-text", text:"[语音识别出现问题，请重试]" }));
           return;
         }
 
-        ws.send(JSON.stringify({ 
-          type: "user-text", 
-          text: userText 
-        }));
+        ws.send(JSON.stringify({ type: "user-text", text: userText }));
 
-        // 暂停当前播放（如果有的话）
         if (isPlaying) {
           isPlaying = false;
           pendingAudio = null;
         }
 
-        // 检查是否已选择角色
         if (!role) {
           console.error(`[${connectionId}] 未选择角色，无法处理消息。请先在界面上选择一个角色。`);
-          ws.send(JSON.stringify({ 
-            type: "error", 
-            msg: "请先选择一个角色" 
-          }));
+          ws.send(JSON.stringify({ type: "error", msg: "请先选择一个角色" }));
           return;
         }
 
-        // 判断是否使用英文语音包 (en_US开头的模型)
         const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
         const replyText = await chatWithLLM(role.system_prompt, userText, llm, isEnglishVoice);
         console.log(`[${connectionId}] AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
 
-        ws.send(JSON.stringify({ 
-          type: "reply-text", 
-          text: replyText 
-        }));
-
-        // 传递当前角色的语音模型
+        ws.send(JSON.stringify({ type: "reply-text", text: replyText }));
         const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
         playAudio(audioBuf.toString("base64"));
       });
     } else if (data && data.type === "regenerate") {
       await safeExecute(async () => {
-        // 新增：处理重新生成AI回复的请求
         console.log(`[${connectionId}] 收到重新生成AI回复请求: ${data.text.substring(0, 30)}${data.text.length > 30 ? '...' : ''}`);
         const userText = data.text;
         const llm = data.llm || DEFAULT_LLM;
         console.log(`[${connectionId}] 选择的LLM模型: ${llm}`);
 
-        // 暂停当前播放（如果有的话）
         if (isPlaying) {
           isPlaying = false;
           pendingAudio = null;
         }
 
-        // 检查是否已选择角色
         if (!role) {
           console.error(`[${connectionId}] 未选择角色，无法处理重新生成请求`);
-          ws.send(JSON.stringify({ 
-            type: "error", 
-            msg: "请先选择一个角色" 
-          }));
+          ws.send(JSON.stringify({ type: "error", msg: "请先选择一个角色" }));
           return;
         }
 
-        // 判断是否使用英文语音包 (en_US开头的模型)
         const isEnglishVoice = role.voice_model && role.voice_model.startsWith('en_US');
         const replyText = await chatWithLLM(role.system_prompt, userText, llm, isEnglishVoice);
         console.log(`[${connectionId}] 重新生成AI回复: ${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}`);
 
-        ws.send(JSON.stringify({ 
-          type: "reply-text", 
-          text: replyText 
-        }));
-
-        // 传递当前角色的语音模型
+        ws.send(JSON.stringify({ type: "reply-text", text: replyText }));
         const audioBuf = await synthesizeSpeech(replyText, role.voice_model);
         playAudio(audioBuf.toString("base64"));
       });
